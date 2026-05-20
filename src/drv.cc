@@ -207,17 +207,40 @@ auto queryCacheStatus(
         }
     }
 
-    if (missing.willBuild.empty() && missing.unknown.empty()) {
-        if (missing.willSubstitute.empty()) {
-            // cacheStatus is Local if:
-            //  - there's nothing to build
-            //  - there's nothing to substitute
-            return Drv::CacheStatus::Local;
+    // Determine cache status based on the derivation's own outputs only.
+    // Even if input derivations need building, the derivation is "cached" if
+    // all of its own outputs are available locally or via substituters.
+    bool outputNeedsBuild = false;
+    bool outputIsUnknown = false;
+    for (auto const &[key, val] : outputs) {
+        if (!val) {
+            continue;
         }
-        // cacheStatus is Cached if:
-        //  - there's nothing to build
-        //  - there are paths to substitute
-        return Drv::CacheStatus::Cached;
+        if (missing.willBuild.contains(*val)) {
+            outputNeedsBuild = true;
+            break;
+        }
+        if (missing.unknown.contains(*val)) {
+            outputIsUnknown = true;
+            break;
+        }
+    }
+
+    if (!outputNeedsBuild && !outputIsUnknown) {
+        // Check if any output needs substitution
+        bool outputNeedsSubstitute = false;
+        for (auto const &[key, val] : outputs) {
+            if (!val) {
+                continue;
+            }
+            if (missing.willSubstitute.contains(*val)) {
+                outputNeedsSubstitute = true;
+            }
+        }
+        if (outputNeedsSubstitute) {
+            return Drv::CacheStatus::Cached;
+        }
+        return Drv::CacheStatus::Local;
     }
     return Drv::CacheStatus::NotBuilt;
 };

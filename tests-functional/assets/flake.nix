@@ -41,6 +41,29 @@
       legacyPackages = forEachSystem (
         s:
         {
+          # Test that a derivation reports cached when its output is in a
+          # substituter, even if an input derivation's output is NOT cached.
+          cachedOutputUncachedInput = rec {
+            uncachedInput = derivation {
+              name = "uncached-input";
+              system = s;
+              builder = "/bin/sh";
+              args = [
+                "-c"
+                "echo uncached > $out"
+              ];
+            };
+            cachedDrv = derivation {
+              name = "cached-drv";
+              system = s;
+              builder = "/bin/sh";
+              args = [
+                "-c"
+                "echo cached > $out; : ${uncachedInput}"
+              ];
+            };
+          };
+
           fodIssue413 = rec {
             neverCached = derivation {
               name = "never-cached";

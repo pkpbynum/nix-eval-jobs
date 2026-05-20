@@ -667,6 +667,72 @@ def _http_server(directory: Path):
 
 @pytest.mark.skipif(shutil.which("nix") is None, reason="requires nix CLI")
 @pytest.mark.parametrize("scheme", ["file", "http"])
+def test_cached_output_with_uncached_input(tmp_path: Path, scheme: str) -> None:
+    """A derivation whose output is in a substituter must report cacheStatus=cached,
+    even when an input derivation's output is absent from the substituter.
+
+    This mirrors the real-world scenario where a NixOS system closure is fully
+    cached but some intermediate build-time dependencies (like tmpfiles.d) are not.
+    """
+    env = _hermetic_nix_env(tmp_path)
+    assets = TEST_ROOT.joinpath("assets")
+    cache = tmp_path / "cache"
+    nix = _make_nix_runner(env, assets)
+
+    nix_system = nix("eval", "--impure", "--raw", "--expr", "builtins.currentSystem", capture=True)
+    flake_attr = f".#legacyPackages.{nix_system}.cachedOutputUncachedInput"
+
+    # Build both derivations
+    nix("build", "--no-link", "--print-out-paths", f"{flake_attr}.uncachedInput")
+    cached_out = nix("build", "--no-link", "--print-out-paths", f"{flake_attr}.cachedDrv", capture=True)
+
+    # Only push the final derivation's output to the cache — NOT the input
+    nix("copy", "--to", f"file://{cache}", cached_out)
+
+    # Garbage collect so nothing is local
+    subprocess.check_call(["nix-collect-garbage", "-d"], env=env)
+
+    with contextlib.ExitStack() as stack:
+        if scheme == "file":
+            substituter = f"file://{cache}"
+        else:
+            substituter = stack.enter_context(_http_server(cache))
+        res = subprocess.check_output(
+            [
+                str(BIN),
+                "--gc-roots-dir",
+                str(tmp_path / "gc"),
+                *COMMON_FLAGS,
+                "--option",
+                "substituters",
+                substituter,
+                "--option",
+                "require-sigs",
+                "false",
+                "--check-cache-status",
+                "--flake",
+                flake_attr,
+            ],
+            cwd=assets,
+            env=env,
+            text=True,
+        )
+
+    jobs = [json.loads(line) for line in res.splitlines() if line]
+    cached_drv = next(job for job in jobs if job["attr"] == "cachedDrv")
+    assert cached_drv["cacheStatus"] == "cached", (
+        f"Expected cacheStatus=cached for derivation whose output is in the substituter, "
+        f"got: {cached_drv}"
+    )
+    assert cached_drv["isCached"] is True
+
+    # The uncached input should report notBuilt
+    uncached_input = next(job for job in jobs if job["attr"] == "uncachedInput")
+    assert uncached_input["cacheStatus"] == "notBuilt"
+
+
+@pytest.mark.skipif(shutil.which("nix") is None, reason="requires nix CLI")
+@pytest.mark.parametrize("scheme", ["file", "http"])
 def test_fod_with_uncached_input_issue413(tmp_path: Path, scheme: str) -> None:
     """An FOD whose output is in a substituter must report cacheStatus=cached,
     even when its build-time-only input drv is absent from every substituter.
