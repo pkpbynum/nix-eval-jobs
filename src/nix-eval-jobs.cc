@@ -57,6 +57,7 @@
 #include "strings-portable.hh"
 #include "output-stream-lock.hh"
 #include "constituents.hh"
+#include "daemon-settings.hh"
 #include "store.hh"
 
 namespace {
@@ -521,6 +522,7 @@ auto main(int argc, char **argv) -> int {
     auto args = std::span(argv, argc);
 
     return nix::handleExceptions(args[0], [&]() -> void {
+        nix_eval_jobs::registerDaemonSettings();
         nix::initNix();
         nix::initGC();
         nix::flakeSettings.configureEvalSettings(nix::evalSettings);

@@ -158,6 +158,26 @@ def test_no_gcroot_dir() -> None:
     assert "this is an evaluation error" in attrs["error"]
 
 
+def test_daemon_only_settings_do_not_warn(tmp_path: Path) -> None:
+    nix_conf_dir = tmp_path / "nix-conf"
+    nix_conf_dir.mkdir()
+    nix_conf_dir.joinpath("nix.conf").write_text("allowed-users = *\ntrusted-users = root @admin\n")
+
+    env = os.environ.copy()
+    env["NIX_CONF_DIR"] = str(nix_conf_dir)
+
+    res = subprocess.run(
+        [str(BIN), "--expr", "42"],
+        cwd=TEST_ROOT.joinpath("assets"),
+        env=env,
+        text=True,
+        check=True,
+        capture_output=True,
+    )
+
+    assert "warning:" not in res.stderr
+
+
 def test_constituents() -> None:
     with TemporaryDirectory() as tempdir:
         cmd = [
