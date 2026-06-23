@@ -18,6 +18,7 @@
 #include <memory>
 #include <nix/cmd/common-eval-args.hh>
 #include <nix/expr/eval-gc.hh>
+#include <nix/fetchers/fetch-settings.hh>
 #include <nix/expr/eval-settings.hh>
 #include <nix/expr/eval.hh> // NOLINT(misc-header-include-cycle)
 #include <nix/flake/flake.hh>
@@ -591,6 +592,11 @@ auto main(int argc, char **argv) -> int {
         if (myArgs.evalStoreUrl.has_value()) {
             nix_eval_jobs::openStore(myArgs.evalStoreUrl);
         }
+
+        /* The fetcher cache is opened lazily on first fetch, so forked
+           workers would otherwise race to create fetcher-cache-v4.sqlite and
+           fail with "unable to open database file". Open it once here. */
+        nix::fetchSettings.getCache();
 
         /* Start a collector thread per worker process. */
         std::vector<Thread> threads;
