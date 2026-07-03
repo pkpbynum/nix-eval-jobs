@@ -341,16 +341,13 @@ auto checkWorkerStatus(LineReader *fromReader, Proc *proc) -> std::string_view {
     return line;
 }
 
-auto getNextJob(nix::Sync<State> &state_, std::condition_variable &wakeup,
-                Proc *proc) -> std::optional<nlohmann::json> {
+auto getNextJob(nix::Sync<State> &state_, std::condition_variable &wakeup)
+    -> std::optional<nlohmann::json> {
     nlohmann::json attrPath;
     while (true) {
         nix::checkInterrupt();
         auto state(state_.lock());
         if ((state->todo.empty() && state->active.empty()) || state->exc) {
-            if (tryWriteLine(proc->to.get(), "exit") < 0) {
-                handleBrokenWorkerPipe(*proc, "sending exit");
-            }
             return std::nullopt;
         }
         if (!state->todo.empty()) {
@@ -437,30 +434,44 @@ void collector(nix::Sync<State> &state_, std::condition_variable &wakeup) {
         std::optional<std::unique_ptr<LineReader>> fromReader_;
 
         while (true) {
-            // Initialize worker if needed
-            if (!proc_.has_value()) {
-                proc_ = std::make_unique<Proc>(worker);
-            }
-            if (!fromReader_.has_value()) {
-                fromReader_ =
-                    std::make_unique<LineReader>(proc_.value()->from.release());
-            }
-
-            auto line = checkWorkerStatus(fromReader_.value().get(),
-                                          proc_.value().get());
-            if (line == "restart") {
-                // Reset worker
-                proc_ = std::nullopt;
-                fromReader_ = std::nullopt;
-                continue;
+            // Check pending worker status before claiming a job
+            if (proc_.has_value()) {
+                auto line = checkWorkerStatus(fromReader_.value().get(),
+                                              proc_.value().get());
+                if (line == "restart") {
+                    // Reset worker
+                    proc_ = std::nullopt;
+                    fromReader_ = std::nullopt;
+                }
             }
 
-            auto maybeAttrPath =
-                getNextJob(state_, wakeup, proc_.value().get());
+            // Only fork after a job is claimed
+            auto maybeAttrPath = getNextJob(state_, wakeup);
             if (!maybeAttrPath.has_value()) {
+                if (proc_.has_value() &&
+                    tryWriteLine(proc_.value()->to.get(), "exit") < 0) {
+                    handleBrokenWorkerPipe(*proc_.value(), "sending exit");
+                }
                 return;
             }
             const auto &attrPath = maybeAttrPath.value();
+
+            // Fork if needed and wait for it to be ready
+            while (!proc_.has_value()) {
+                proc_ = std::make_unique<Proc>(worker);
+                fromReader_ =
+                    std::make_unique<LineReader>(proc_.value()->from.release());
+
+                auto line = checkWorkerStatus(fromReader_.value().get(),
+                                              proc_.value().get());
+                // New worker either sends "next" or `checkWorkerStatus` throws
+                if (line != "next") {
+                    throw nix::Error(
+                        "BUG: freshly forked worker sent '%s' instead of "
+                        "'next'",
+                        line);
+                }
+            }
 
             if (tryWriteLine(proc_.value()->to.get(), "do " + attrPath.dump()) <
                 0) {
