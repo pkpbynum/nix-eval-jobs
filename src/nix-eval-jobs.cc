@@ -430,16 +430,15 @@ void updateJobQueue(nix::Sync<State> &state_, std::condition_variable &wakeup,
 
 void collector(nix::Sync<State> &state_, std::condition_variable &wakeup) {
     try {
-        std::optional<std::unique_ptr<Proc>> proc_;
-        std::optional<std::unique_ptr<LineReader>> fromReader_;
+        std::unique_ptr<Proc> proc;
+        std::unique_ptr<LineReader> fromReader;
 
         while (true) {
             // Claim a job before forking so over-provisioned workers stay idle
             auto maybeAttrPath = getNextJob(state_, wakeup);
             if (!maybeAttrPath.has_value()) {
-                if (proc_.has_value() &&
-                    tryWriteLine(proc_.value()->to.get(), "exit") < 0) {
-                    handleBrokenWorkerPipe(*proc_.value(), "sending exit");
+                if (proc && tryWriteLine(proc->to.get(), "exit") < 0) {
+                    handleBrokenWorkerPipe(*proc, "sending exit");
                 }
                 return;
             }
@@ -447,29 +446,26 @@ void collector(nix::Sync<State> &state_, std::condition_variable &wakeup) {
 
             // Ensure we have a worker that is ready for a job ("next")
             while (true) {
-                if (!proc_.has_value()) {
-                    proc_ = std::make_unique<Proc>(worker);
-                    fromReader_ = std::make_unique<LineReader>(
-                        proc_.value()->from.release());
+                if (!proc) {
+                    proc = std::make_unique<Proc>(worker);
+                    fromReader =
+                        std::make_unique<LineReader>(proc->from.release());
                 }
-                auto line = checkWorkerStatus(fromReader_.value().get(),
-                                              proc_.value().get());
+                auto line = checkWorkerStatus(fromReader.get(), proc.get());
                 if (line != "restart") {
                     break;
                 }
-                proc_ = std::nullopt;
-                fromReader_ = std::nullopt;
+                proc.reset();
+                fromReader.reset();
             }
 
-            if (tryWriteLine(proc_.value()->to.get(), "do " + attrPath.dump()) <
-                0) {
+            if (tryWriteLine(proc->to.get(), "do " + attrPath.dump()) < 0) {
                 auto msg = "sending attrPath '" + joinAttrPath(attrPath) + "'";
-                handleBrokenWorkerPipe(*proc_.value(), msg);
+                handleBrokenWorkerPipe(*proc, msg);
             }
 
-            auto newAttrs =
-                processWorkerResponse(fromReader_.value().get(), attrPath,
-                                      proc_.value().get(), state_);
+            auto newAttrs = processWorkerResponse(fromReader.get(), attrPath,
+                                                  proc.get(), state_);
 
             updateJobQueue(state_, wakeup, attrPath, newAttrs);
         }
