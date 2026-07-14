@@ -434,18 +434,7 @@ void collector(nix::Sync<State> &state_, std::condition_variable &wakeup) {
         std::optional<std::unique_ptr<LineReader>> fromReader_;
 
         while (true) {
-            // Check pending worker status before claiming a job
-            if (proc_.has_value()) {
-                auto line = checkWorkerStatus(fromReader_.value().get(),
-                                              proc_.value().get());
-                if (line == "restart") {
-                    // Reset worker
-                    proc_ = std::nullopt;
-                    fromReader_ = std::nullopt;
-                }
-            }
-
-            // Only fork after a job is claimed
+            // Claim a job before forking so over-provisioned workers stay idle
             auto maybeAttrPath = getNextJob(state_, wakeup);
             if (!maybeAttrPath.has_value()) {
                 if (proc_.has_value() &&
@@ -456,21 +445,20 @@ void collector(nix::Sync<State> &state_, std::condition_variable &wakeup) {
             }
             const auto &attrPath = maybeAttrPath.value();
 
-            // Fork if needed and wait for it to be ready
-            while (!proc_.has_value()) {
-                proc_ = std::make_unique<Proc>(worker);
-                fromReader_ =
-                    std::make_unique<LineReader>(proc_.value()->from.release());
-
+            // Ensure we have a worker that is ready for a job ("next")
+            while (true) {
+                if (!proc_.has_value()) {
+                    proc_ = std::make_unique<Proc>(worker);
+                    fromReader_ = std::make_unique<LineReader>(
+                        proc_.value()->from.release());
+                }
                 auto line = checkWorkerStatus(fromReader_.value().get(),
                                               proc_.value().get());
-                // New worker either sends "next" or `checkWorkerStatus` throws
-                if (line != "next") {
-                    throw nix::Error(
-                        "BUG: freshly forked worker sent '%s' instead of "
-                        "'next'",
-                        line);
+                if (line != "restart") {
+                    break;
                 }
+                proc_ = std::nullopt;
+                fromReader_ = std::nullopt;
             }
 
             if (tryWriteLine(proc_.value()->to.get(), "do " + attrPath.dump()) <
