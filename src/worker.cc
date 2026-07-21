@@ -7,6 +7,7 @@
 #include <nix/expr/attr-path.hh>
 #include <nix/store/local-fs-store.hh>
 #include <nix/store/globals.hh>
+#include <nix/main/loggers.hh>
 #include <nix/cmd/installable-flake.hh>
 #include <nix/expr/value-to-json.hh>
 #include <sys/resource.h>
@@ -403,6 +404,11 @@ void worker(
     MyArgs &args,
     nix::AutoCloseFD &toParent, // NOLINT(bugprone-easily-swappable-parameters)
     nix::AutoCloseFD &fromParent) {
+
+    // nix::startProcess() resets nix::logger in every forked child (see
+    // src/libutil/unix/processes.cc). Reset it here to the format
+    // requested by the user.
+    nix::setLogFormat(args.logFormat);
 
     auto evalStore = nix_eval_jobs::openStore(args.evalStoreUrl);
     auto state = nix::make_ref<nix::EvalState>(

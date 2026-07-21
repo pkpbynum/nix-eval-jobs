@@ -7,6 +7,7 @@
 #include <nix/flake/lockfile.hh>
 #include <nix/util/canon-path.hh>
 #include <nix/main/common-args.hh>
+#include <nix/main/loggers.hh>
 #include <nix/cmd/common-eval-args.hh>
 #include <nix/util/source-accessor.hh>
 #include <nix/flake/flakeref.hh>
@@ -296,6 +297,19 @@ MyArgs::MyArgs() : MixCommonArgs("nix-eval-jobs") {
         }},
         .completer = completePath,
         .experimentalFeature = std::nullopt,
+    });
+
+    addFlag({
+        .longName = "log-format",
+        .description =
+            "Set the format of log output; one of `raw`, `internal-json`, "
+            "`bar` or `bar-with-logs`.",
+        .category = "",
+        .labels = {"format"},
+        .handler = {[this](std::string format) -> void {
+            logFormat = format;
+            nix::setLogFormat(format);
+        }},
     });
 
     expectArg("expr", &releaseExpr);
